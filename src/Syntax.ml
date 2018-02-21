@@ -1,14 +1,18 @@
 (* Opening a library for generic programming (https://github.com/dboulytchev/GT).
    The library provides "@type ..." syntax extension and plugins like show, etc.
 *)
-open GT 
-    
+open GT
+open List
+
+let int_of_bool b = if b then 1 else 0
+let bool_of_int i = if i == 0 then false else true
+
 (* Simple expressions: syntax and semantics *)
 module Expr =
   struct
-    
-    (* The type for expressions. Note, in regular OCaml there is no "@type..." 
-       notation, it came from GT. 
+
+    (* The type for expressions. Note, in regular OCaml there is no "@type..."
+       notation, it came from GT.
     *)
     @type t =
     (* integer constant *) | Const of int
@@ -22,9 +26,9 @@ module Expr =
         +, -                 --- addition, subtraction
         *, /, %              --- multiplication, division, reminder
     *)
-                                                            
+
     (* State: a partial map from variables to integer values. *)
-    type state = string -> int 
+    type state = string -> int
 
     (* Empty state: maps every variable into nothing. *)
     let empty = fun x -> failwith (Printf.sprintf "Undefined variable %s" x)
@@ -37,14 +41,32 @@ module Expr =
     (* Expression evaluator
 
           val eval : state -> t -> int
- 
+
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval sf e =
+      match e with
+      | Const n -> n
+      | Var x -> sf x
+      | Binop (op, a, b) ->
+        match op with
+        | "+" -> eval sf a + eval sf b
+        | "-" -> eval sf a - eval sf b
+        | "*" -> eval sf a * eval sf b
+        | "/" -> eval sf a / eval sf b
+        | "%" -> eval sf a mod eval sf b
+        | "==" -> int_of_bool (eval sf a == eval sf b)
+        | "!=" -> int_of_bool (eval sf a != eval sf b)
+        | "<=" -> int_of_bool (eval sf a <= eval sf b)
+        | "<" -> int_of_bool (eval sf a < eval sf b)
+        | ">=" -> int_of_bool (eval sf a >= eval sf b)
+        | ">" -> int_of_bool (eval sf a > eval sf b)
+        | "!!" -> int_of_bool ((bool_of_int (eval sf a)) || (bool_of_int (eval sf b)))
+        | "&&" -> int_of_bool ((bool_of_int (eval sf a)) && (bool_of_int (eval sf b)))
 
   end
-                    
+
 (* Simple statements: syntax and sematics *)
 module Stmt =
   struct
@@ -57,7 +79,7 @@ module Stmt =
     (* composition                      *) | Seq    of t * t with show
 
     (* The type of configuration: a state, an input stream, an output stream *)
-    type config = Expr.state * int list * int list 
+    type config = Expr.state * int list * int list
 
     (* Statement evaluator
 
@@ -65,6 +87,10 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
-                                                         
+    let rec eval (sf, input, output) e =
+      match e with
+      | Read x -> (Expr.update x (hd input) sf, tl input, output)
+      | Write e -> (sf, input, (Expr.eval sf e) :: output)
+      | Assign (x, e) -> (Expr.update x (Expr.eval sf e) sf, input, output)
+      | Seq (s, s') -> eval (eval (sf, input, output) s) s'
   end
