@@ -7,6 +7,7 @@ open List
 (* binary operator                 *) | BINOP of string
 (* read to stack                   *) | READ
 (* write from stack                *) | WRITE
+(* put a constant to stack         *) | CONST of int
 (* load a variable to the stack    *) | LD    of string
 (* store a variable from the stack *) | ST    of string with show
 
@@ -28,6 +29,7 @@ let eval_one (stack, sf, input, output) op =
   match op with
   | READ -> (hd input :: stack, sf, tl input, output)
   | WRITE -> (tl stack, sf, input, hd stack :: output)
+  | CONST n -> (n :: stack, sf, input, output)
   | LD x -> (sf x :: stack, sf, input, output)
   | ST x -> (tl stack, Expr.update x (hd stack) sf, input, output)
   | BINOP op ->
@@ -58,4 +60,15 @@ let eval cfg = fold_left eval_one cfg
    stack machine
  *)
 
-let compile _ = failwith "Cannot be implemented without an opcode for putting constant on the stack"
+let rec compile_expr e =
+  match e with
+  | Expr.Const n -> [CONST n]
+  | Expr.Var x -> [LD x]
+  | Expr.Binop (op, a, b) -> compile_expr a @ compile_expr b @ [BINOP op]
+
+let rec compile st =
+  match st with
+  | Stmt.Read x -> [READ; ST x]
+  | Stmt.Write e -> compile_expr e @ [WRITE]
+  | Stmt.Assign (x, e) -> compile_expr e @ [ST x]
+  | Stmt.Seq (s, s') -> compile s @ compile s'
