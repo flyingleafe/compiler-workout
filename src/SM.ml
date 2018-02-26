@@ -25,16 +25,16 @@ type config = int list * Stmt.config
 
    Takes a configuration and a program, and returns a configuration as a result
  *)
-let eval_one (stack, sf, input, output) op =
+let eval_one (stack, (sf, input, output)) op =
   match op with
-  | READ -> (hd input :: stack, sf, tl input, output)
-  | WRITE -> (tl stack, sf, input, hd stack :: output)
-  | CONST n -> (n :: stack, sf, input, output)
-  | LD x -> (sf x :: stack, sf, input, output)
-  | ST x -> (tl stack, Expr.update x (hd stack) sf, input, output)
+  | READ -> (hd input :: stack, (sf, tl input, output))
+  | WRITE -> (tl stack, (sf, input, hd stack :: output))
+  | CONST n -> (n :: stack, (sf, input, output))
+  | LD x -> (sf x :: stack, (sf, input, output))
+  | ST x -> (tl stack, (Expr.update x (hd stack) sf, input, output))
   | BINOP op ->
     let x :: y :: rest = stack
-    in (Expr.eval_op op x y :: rest, sf, input, output)
+    in (Expr.eval_op op x y :: rest, (sf, input, output))
 
 let eval cfg = fold_left eval_one cfg
 
