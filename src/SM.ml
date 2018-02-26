@@ -1,5 +1,5 @@
 open GT
-open Syntax
+open Language
 open List
 
 (* The type for the stack machine instructions *)
@@ -17,7 +17,7 @@ type prg = insn list
 (* The type for the stack machine configuration: a stack and a configuration from statement
    interpreter
  *)
-type config = int list * Syntax.Stmt.config
+type config = int list * Stmt.config
 
 (* Stack machine interpreter
 
@@ -38,9 +38,17 @@ let eval_one (stack, sf, input, output) op =
 
 let eval cfg = fold_left eval_one cfg
 
+(* Top-level evaluation
+
+     val run : prg -> int list -> int list
+
+   Takes an input stream, a program, and returns an output stream this program calculates
+*)
+let run p i = let (_, (_, _, o)) = eval ([], (Expr.empty, i, [])) p in o
+
 (* Stack machine compiler
 
-     val compile : Syntax.Stmt.t -> prg
+     val compile : Language.Stmt.t -> prg
 
    Takes a program in the source language and returns an equivalent program for the
    stack machine
