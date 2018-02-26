@@ -33,22 +33,8 @@ let eval_one (stack, sf, input, output) op =
   | LD x -> (sf x :: stack, sf, input, output)
   | ST x -> (tl stack, Expr.update x (hd stack) sf, input, output)
   | BINOP op ->
-    let x :: y :: rest = stack in
-    let z = match op with
-      | "+" -> x + y
-      | "-" -> x - y
-      | "*" -> x * y
-      | "/" -> x / y
-      | "%" -> x mod y
-      | "==" -> int_of_bool (x == y)
-      | "!=" -> int_of_bool (x != y)
-      | "<=" -> int_of_bool (x <= y)
-      | "<" -> int_of_bool (x < y)
-      | ">=" -> int_of_bool (x >= y)
-      | ">" -> int_of_bool (x > y)
-      | "!!" -> int_of_bool ((bool_of_int x) || (bool_of_int y))
-      | "&&" -> int_of_bool ((bool_of_int x) && (bool_of_int y))
-    in (z :: rest, sf, input, output)
+    let x :: y :: rest = stack
+    in (Expr.eval_op op x y :: rest, sf, input, output)
 
 let eval cfg = fold_left eval_one cfg
 

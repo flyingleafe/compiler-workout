@@ -38,32 +38,38 @@ module Expr =
     *)
     let update x v s = fun y -> if x = y then v else s y
 
+    (* Perform an operation encoded as string
+
+          val eval_op : string -> int -> int -> int
+    *)
+    let eval_op op x y =
+      match op with
+      | "+" -> x + y
+      | "-" -> x - y
+      | "*" -> x * y
+      | "/" -> x / y
+      | "%" -> x mod y
+      | "==" -> int_of_bool (x == y)
+      | "!=" -> int_of_bool (x != y)
+      | "<=" -> int_of_bool (x <= y)
+      | "<" -> int_of_bool (x < y)
+      | ">=" -> int_of_bool (x >= y)
+      | ">" -> int_of_bool (x > y)
+      | "!!" -> int_of_bool ((bool_of_int x) || (bool_of_int y))
+      | "&&" -> int_of_bool ((bool_of_int x) && (bool_of_int y))
+
     (* Expression evaluator
 
           val eval : state -> t -> int
 
-       Takes a state and an expression, and returns the value of the expression in 
+       Takes a state and an expression, and returns the value of the expression in
        the given state.
     *)
     let rec eval sf e =
       match e with
       | Const n -> n
       | Var x -> sf x
-      | Binop (op, a, b) ->
-        match op with
-        | "+" -> eval sf a + eval sf b
-        | "-" -> eval sf a - eval sf b
-        | "*" -> eval sf a * eval sf b
-        | "/" -> eval sf a / eval sf b
-        | "%" -> eval sf a mod eval sf b
-        | "==" -> int_of_bool (eval sf a == eval sf b)
-        | "!=" -> int_of_bool (eval sf a != eval sf b)
-        | "<=" -> int_of_bool (eval sf a <= eval sf b)
-        | "<" -> int_of_bool (eval sf a < eval sf b)
-        | ">=" -> int_of_bool (eval sf a >= eval sf b)
-        | ">" -> int_of_bool (eval sf a > eval sf b)
-        | "!!" -> int_of_bool ((bool_of_int (eval sf a)) || (bool_of_int (eval sf b)))
-        | "&&" -> int_of_bool ((bool_of_int (eval sf a)) && (bool_of_int (eval sf b)))
+      | Binop (op, a, b) -> eval_op op (eval sf a) (eval sf b)
 
   end
 
