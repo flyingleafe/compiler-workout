@@ -3,6 +3,7 @@
 *)
 open GT
 (* Opening a library for combinator-based syntax analysis *)
+open Ostap
 open Ostap.Combinators
 (* Opening a library for lists *)
 open List
@@ -60,6 +61,7 @@ module Expr =
       | ">" -> int_of_bool (x > y)
       | "!!" -> int_of_bool ((bool_of_int x) || (bool_of_int y))
       | "&&" -> int_of_bool ((bool_of_int x) && (bool_of_int y))
+      | other -> failwith ("Unexpected operator: " ^ other)
 
     (* Expression evaluator
 
@@ -80,8 +82,29 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string
 
     *)
+
+    let ostapOps ops = map (fun op -> (ostap ($(op)), fun x y -> Binop(op, x, y))) ops
+
     ostap (
-      parse: empty {failwith "Not implemented yet"}
+      parse: expr;
+
+      expr:
+        !(Util.expr
+            (fun x -> x)
+            [|
+              `Lefta, ostapOps ["!!"];
+              `Lefta, ostapOps ["&&"];
+              `Nona,  ostapOps ["<="; ">="; ">"; "<"; "=="; "!="];
+              `Lefta, ostapOps ["+"; "-"];
+              `Lefta, ostapOps ["*"; "/"; "%"]
+            |]
+            term
+         );
+
+      term:
+          name:IDENT { Var name }
+        | n:DECIMAL  { Const n }
+        | -"(" expr -")"
     )
 
   end
@@ -109,13 +132,25 @@ module Stmt =
     let rec eval (sf, input, output) e =
       match e with
       | Read x -> (Expr.update x (hd input) sf, tl input, output)
-      | Write e -> (sf, input, (Expr.eval sf e) :: output)
+      | Write e -> (sf, input, output @ [(Expr.eval sf e)])
       | Assign (x, e) -> (Expr.update x (Expr.eval sf e) sf, input, output)
       | Seq (s, s') -> eval (eval (sf, input, output) s) s'
 
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not implemented yet"}
+      parse:
+          sequence
+        | statement
+        ;
+
+      statement:
+          -"read" -"(" name:IDENT -")"            { Read name }
+        | -"write" -"(" expr: !(Expr.parse) -")"  { Write expr }
+        | name:IDENT -":=" expr: !(Expr.parse)    { Assign (name, expr) }
+        ;
+
+      sequence:
+          head:statement -";" tail:parse          { Seq (head, tail) }
     )
   end
 
