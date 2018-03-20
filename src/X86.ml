@@ -81,14 +81,39 @@ open SM
    of x86 instructions
 *)
 
+let div_res_reg = function
+  | "/" -> eax
+  | "%" -> edx
+  | _   -> failwith "Wrong division operation"
+
+let comp_flag = function
+  | "==" -> "e"
+  | "!=" -> "ne"
+  | "<=" -> "le"
+  | "<"  -> "l"
+  | ">=" -> "ge"
+  | ">"  -> "g"
+  | _    -> failwith "Wrong comparison operator"
 
 let compile_binop env op =
-  let opA, opB, env = env#pop2 in
+  let opB, opA, env = env#pop2 in
   let res, env = env#allocate in
   match op with
   | "+" | "-" | "*" ->
-    env, [Mov (opA, eax); Binop (op, eax, opB); Mov (eax, res)]
-  | _ -> failwith "Not yet implemented"
+    env, [Mov (opA, eax); Binop (op, opB, eax); Mov (eax, res)]
+  | "/" | "%" ->
+    env, [Mov (opA, eax); Cltd; IDiv opB; Mov (div_res_reg op, res)]
+  | "==" | "!=" | "<=" | "<" | ">=" | ">" ->
+    env, [Binop ("^", eax, eax); Mov (opA, edx); Binop ("cmp", opB, edx);
+          Set (comp_flag op, "%al"); Mov (eax, res)]
+  | "!!" ->
+    env, [Binop ("^", eax, eax); Mov (opA, edx); Binop ("!!", opB, edx);
+          Set ("nz", "%al"); Mov (eax, res)]
+  | "&&" ->
+    env, [Binop ("^", eax, eax); Binop ("cmp", opA, eax); Set ("ne", "%al");
+          Binop ("^", edx, edx); Binop ("cmp", opB, edx); Set ("ne", "%dl");
+          Binop ("&&", edx, eax); Mov (eax, res)]
+  | _ -> failwith "Not supported operation"
 
 let compile_instr env = function
   | CONST n ->
@@ -102,10 +127,10 @@ let compile_instr env = function
     env, [Push pos; Call "Lwrite"; Pop eax]
   | LD name ->
     let pos, env = (env#global name)#allocate in
-    env, [Mov (M name, pos)]
+    env, [Mov (M (env#loc name), pos)]
   | ST name ->
     let pos, env = (env#global name)#pop in
-    env, [Mov (pos, M name)]
+    env, [Mov (pos, M (env#loc name))]
   | BINOP op -> compile_binop env op
 
 let rec compile env = function
