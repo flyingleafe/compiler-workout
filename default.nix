@@ -1,5 +1,5 @@
 with import <nixpkgs> {}; {
-  ocamlEnv = stdenv.mkDerivation {
+  ocamlEnv = pkgsi686Linux.stdenv.mkDerivation {
     name = "ocamlEnv";
     buildInputs = [
       ocaml
