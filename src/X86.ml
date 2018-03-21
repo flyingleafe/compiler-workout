@@ -127,10 +127,20 @@ let compile_instr env = function
     env, [Push pos; Call "Lwrite"; Pop eax]
   | LD name ->
     let pos, env = (env#global name)#allocate in
-    env, [Mov (M (env#loc name), pos)]
+    let mem_pos = M (env#loc name) in
+    (match pos with
+     | R _ ->
+       env, [Mov (mem_pos, pos)]
+     | S _ ->
+       env, [Mov (mem_pos, eax); Mov (eax, pos)])
   | ST name ->
     let pos, env = (env#global name)#pop in
-    env, [Mov (pos, M (env#loc name))]
+    let mem_pos = M (env#loc name) in
+    (match pos with
+     | R _ ->
+       env, [Mov (pos, mem_pos)]
+     | S _ ->
+       env, [Mov (pos, eax); Mov (eax, mem_pos)])
   | BINOP op -> compile_binop env op
 
 let rec compile env = function
