@@ -30,8 +30,8 @@ type config = int list * Stmt.config
    environment is used to locate a label to jump to (via method env#labeled <label_name>)
  *)
 let check_cond x = function
-  | "true"  -> x <> 0
-  | "false" -> x = 0
+  | "nz"  -> x <> 0
+  | "z" -> x = 0
   | _       -> failwith "Invalid condition type"
 
 let rec eval env ((stack, ((sf, input, output) as in_env)) as config) = function
@@ -50,7 +50,7 @@ let rec eval env ((stack, ((sf, input, output) as in_env)) as config) = function
          (if check_cond (hd stack) cond then (env#labeled label) else ops)
      | BINOP op  ->
        let y :: x :: rest = stack
-       in (Expr.eval_op op x y :: rest, (sf, input, output))
+       in eval env (Expr.eval_op op x y :: rest, (sf, input, output)) ops
     )
 
 (* Top-level evaluation
@@ -103,7 +103,7 @@ let rec compile' lbls st =
     let end_jump, end_label =
       (match els_code with [] -> [], [] | _ -> [JMP lbl_end], [LABEL lbl_end]) in
     lbls3,
-    cond_code @ [CJMP ("false", lbl_els)] @ the_code @ end_jump @
+    cond_code @ [CJMP ("z", lbl_els)] @ the_code @ end_jump @
     [LABEL lbl_els] @ els_code @ end_label
   | Stmt.While (cond, action) ->
     let lbl_begin, lbls' = lbls#new_label in
@@ -111,14 +111,14 @@ let rec compile' lbls st =
     let cond_code = compile_expr cond in
     let lbls2, act_code = compile' lbls1 action in
     lbls2,
-    [LABEL lbl_begin] @ cond_code @ [CJMP ("false", lbl_end)] @
+    [LABEL lbl_begin] @ cond_code @ [CJMP ("z", lbl_end)] @
     act_code @ [JMP lbl_begin] @ [LABEL lbl_end]
   | Stmt.Repeat (action, cond) ->
     let lbl_begin, lbls' = lbls#new_label in
     let lbls1, act_code = compile' lbls' action in
     let cond_code = compile_expr cond in
     lbls1,
-    [LABEL lbl_begin] @ act_code @ cond_code @ [CJMP ("true", lbl_begin)]
+    [LABEL lbl_begin] @ act_code @ cond_code @ [CJMP ("nz", lbl_begin)]
   | Stmt.Seq (s, s') ->
     let lbls1, fst = compile' lbls s in
     let lbls2, snd = compile' lbls1 s' in
