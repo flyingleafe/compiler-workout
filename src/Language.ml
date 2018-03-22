@@ -118,7 +118,11 @@ module Stmt =
     (* read into the variable           *) | Read   of string
     (* write the value of an expression *) | Write  of Expr.t
     (* assignment                       *) | Assign of string * Expr.t
-    (* composition                      *) | Seq    of t * t with show
+    (* composition                      *) | Seq    of t * t
+    (* empty statement                  *) | Skip
+    (* conditional                      *) | If     of Expr.t * t * t
+    (* loop with a pre-condition        *) | While  of Expr.t * t
+    (* loog with a post-condition       *) | Repeat of t * Expr.t with show
 
     (* The type of configuration: a state, an input stream, an output stream *)
     type config = Expr.state * int list * int list
@@ -137,6 +141,12 @@ module Stmt =
       | Seq (s, s') -> eval (eval (sf, input, output) s) s'
 
     (* Statement parser *)
+    let elif_branch elif els =
+      let last_action = match els with
+        | None -> Skip
+        | Some act -> act
+      in fold_right (fun (cond, action) branch -> If (cond, action, branch)) elif last_action
+
     ostap (
       parse:
           sequence
@@ -144,9 +154,18 @@ module Stmt =
         ;
 
       statement:
-          -"read" -"(" name:IDENT -")"            { Read name }
-        | -"write" -"(" expr: !(Expr.parse) -")"  { Write expr }
-        | name:IDENT -":=" expr: !(Expr.parse)    { Assign (name, expr) }
+          %"read" "(" name:IDENT ")"                             { Read name }
+        | %"write" "(" expr: !(Expr.parse) ")"                   { Write expr }
+        | %"skip"                                                { Skip }
+        | name:IDENT ":=" expr: !(Expr.parse)                    { Assign (name, expr) }
+        | %"if" cond: !(Expr.parse) %"then" action:parse
+              elif:(%"elif" !(Expr.parse) %"then" parse)*
+              els:(%"else" parse)?
+              %"fi"                                              { If (cond, action, elif_branch elif els)}
+        | %"while" cond: !(Expr.parse) %"do" action:parse %"od"  { While (cond, action) }
+        | %"repeat" action:parse %"until" cond: !(Expr.parse)    { Repeat (action, cond) }
+        | %"for" init:parse "," cond: !(Expr.parse)
+              "," inc:parse %"do" action:parse %"od"             { Seq (init, While (cond, Seq (action, inc))) }
         ;
 
       sequence:
