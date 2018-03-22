@@ -46,7 +46,7 @@ let rec eval env ((stack, ((sf, input, output) as in_env)) as config) = function
      | LABEL _   -> eval env config ops
      | JMP label -> eval env config (env#labeled label)
      | CJMP (cond, label) ->
-       eval env config
+       eval env (tl stack, in_env)
          (if check_cond (hd stack) cond then (env#labeled label) else ops)
      | BINOP op  ->
        let y :: x :: rest = stack
@@ -118,7 +118,7 @@ let rec compile' lbls st =
     let lbls1, act_code = compile' lbls' action in
     let cond_code = compile_expr cond in
     lbls1,
-    [LABEL lbl_begin] @ act_code @ cond_code @ [CJMP ("nz", lbl_begin)]
+    [LABEL lbl_begin] @ act_code @ cond_code @ [CJMP ("z", lbl_begin)]
   | Stmt.Seq (s, s') ->
     let lbls1, fst = compile' lbls s in
     let lbls2, snd = compile' lbls1 s' in

@@ -153,7 +153,12 @@ module Stmt =
           else config'
         in while_cycle config
       | Repeat (action, cond) ->
-        eval (eval config action) (While (cond, action))
+        let rec repeat_cycle (sf', _, _) as config' =
+          let (sf'', _, _) as config'' = eval config' action in
+          if (Expr.eval sf'' cond == 1)
+          then config''
+          else repeat_cycle config''
+        in repeat_cycle config
 
     (* Statement parser *)
     let elif_branch elif els =

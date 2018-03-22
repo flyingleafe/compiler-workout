@@ -153,7 +153,8 @@ let compile_instr env = function
   | JMP label ->
     env, [Jmp label]
   | CJMP (cond, label) ->
-    env, [CJmp (cond, label)]
+    let pos, env = env#pop in
+    env, [Binop ("cmp", L 0, pos); CJmp (cond, label)]
   | BINOP op -> compile_binop env op
 
 let rec compile env = function
