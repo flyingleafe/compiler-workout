@@ -43,7 +43,7 @@ type instr =
 (* a label in the code                                  *) | Label of string
 (* a conditional jump                                   *) | CJmp  of string * string
 (* a non-conditional jump                               *) | Jmp   of string
-                                                               
+
 (* Instruction printer *)
 let show instr =
   let binop = function
@@ -101,6 +101,11 @@ let comp_flag = function
   | ">"  -> "g"
   | _    -> failwith "Wrong comparison operator"
 
+let if_register pos the els =
+  match pos with
+  | R _ -> the
+  | _   -> els
+
 let compile_binop env op =
   let opB, opA, env = env#pop2 in
   let res, env = env#allocate in
@@ -134,19 +139,21 @@ let compile_instr env = function
   | LD name ->
     let pos, env = (env#global name)#allocate in
     let mem_pos = M (env#loc name) in
-    (match pos with
-     | R _ ->
-       env, [Mov (mem_pos, pos)]
-     | S _ ->
-       env, [Mov (mem_pos, eax); Mov (eax, pos)])
+    env, if_register pos
+      [Mov (mem_pos, pos)]
+      [Mov (mem_pos, eax); Mov (eax, pos)]
   | ST name ->
     let pos, env = (env#global name)#pop in
     let mem_pos = M (env#loc name) in
-    (match pos with
-     | R _ ->
-       env, [Mov (pos, mem_pos)]
-     | S _ ->
-       env, [Mov (pos, eax); Mov (eax, mem_pos)])
+    env, if_register pos
+      [Mov (pos, mem_pos)]
+      [Mov (pos, eax); Mov (eax, mem_pos)]
+  | LABEL label ->
+    env, [Label label]
+  | JMP label ->
+    env, [Jmp label]
+  | CJMP (cond, label) ->
+    env, [CJmp (cond, label)]
   | BINOP op -> compile_binop env op
 
 let rec compile env = function
