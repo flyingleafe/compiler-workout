@@ -133,12 +133,27 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let rec eval (sf, input, output) e =
+    let rec eval ((sf, input, output) as config) e =
       match e with
-      | Read x -> (Expr.update x (hd input) sf, tl input, output)
-      | Write e -> (sf, input, output @ [(Expr.eval sf e)])
-      | Assign (x, e) -> (Expr.update x (Expr.eval sf e) sf, input, output)
-      | Seq (s, s') -> eval (eval (sf, input, output) s) s'
+      | Read x ->
+        (Expr.update x (hd input) sf, tl input, output)
+      | Write e ->
+        (sf, input, output @ [(Expr.eval sf e)])
+      | Assign (x, e) ->
+        (Expr.update x (Expr.eval sf e) sf, input, output)
+      | Seq (s, s') ->
+        eval (eval config s) s'
+      | Skip -> config
+      | If (cond, the, els) ->
+        eval config (if Expr.eval sf cond == 1 then the else els)
+      | While (cond, action) ->
+        let rec while_cycle (sf', _, _) as config' =
+          if (Expr.eval sf' cond == 1)
+          then while_cycle (eval config' action)
+          else config'
+        in while_cycle config
+      | Repeat (action, cond) ->
+        eval (eval config action) (While (cond, action))
 
     (* Statement parser *)
     let elif_branch elif els =
