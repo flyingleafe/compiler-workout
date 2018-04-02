@@ -5,6 +5,8 @@ open GT
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap
 open Combinators
+(* Opening a library for lists *)
+open List
 
 (* States *)
 module State =
@@ -21,21 +23,22 @@ module State =
     (* Update: non-destructively "modifies" the state s by binding the variable x
        to value v and returns the new state w.r.t. a scope
     *)
-    let update x v s = failwith "Not implemented"
+    let update_func x v s = fun x' -> if x = x' then v else s x'
+
+    let update x v s = if mem x s.scope
+      then {s with l = update_func x v s.l}
+      else {s with g = update_func x v s.g}
 
     (* Evals a variable in a state w.r.t. a scope *)
-    let eval s x = failwith "Not implemented"
+    let eval s x = if mem x s.scope then s.l x else s.g x
 
     (* Creates a new scope, based on a given state *)
-    let enter st xs = failwith "Not implemented"
+    let enter st xs = {empty with g = st.g; scope = xs}
 
     (* Drops a scope *)
-    let leave st st' = failwith "Not implemented"
+    let leave st st' = {st' with g = st.g}
 
   end
-
-(* Opening a library for lists *)
-open List
 
 let int_of_bool b = if b then 1 else 0
 let bool_of_int i = if i == 0 then false else true
@@ -182,6 +185,13 @@ module Stmt =
           then config''
           else repeat_cycle config''
         in repeat_cycle config
+      | Call (func, args) ->
+        let (params, locals, body) = env#definition func in
+        let param_vals = combine params (map (Expr.eval sf) args) in
+        let sf' = State.enter sf (params @ locals) in
+        let sf' = fold_left (fun s (p, v) -> State.update p v s) sf' param_vals in
+        let (sf'', input', output') = eval env (sf', input, output) body in
+        (State.leave sf'' sf, input', output')
 
     (* Statement parser *)
     let elif_branch elif els =
@@ -199,8 +209,11 @@ module Stmt =
       statement:
           %"read" "(" name:IDENT ")"                             { Read name }
         | %"write" "(" expr: !(Expr.parse) ")"                   { Write expr }
+        | name:IDENT
+              s: ( ":=" expr: !(Expr.parse)                      { Assign (name, expr) }
+                 | "(" args: !(Util.list0 Expr.parse) ")"        { Call (name, args) }
+                 )                                               { s }
         | %"skip"                                                { Skip }
-        | name:IDENT ":=" expr: !(Expr.parse)                    { Assign (name, expr) }
         | %"if" cond: !(Expr.parse) %"then" action:parse
               elif:(%"elif" !(Expr.parse) %"then" parse)*
               els:(%"else" parse)?
@@ -248,7 +261,18 @@ type t = Definition.t list * Stmt.t
 
    Takes a program and its input stream, and returns the output stream
 *)
-let eval (defs, body) i = failwith "Not implemented"
+module M = Map.Make (String)
+
+class def_env =
+  object (self)
+    val mp = M.empty
+    method definition func = M.find func mp
+    method define func (def: (string list * string list * Stmt.t)) = {< mp = M.add func def mp >}
+  end
+
+let eval (defs, body) i =
+  let env = fold_left (fun e (f, d) -> e#define f d) (new def_env) defs in
+  let (_, _, o) = Stmt.eval env (State.empty, i, []) body in o
 
 (* Top-level parser *)
 let parse = ostap (!(Definition.parse)* !(Stmt.parse))
