@@ -26,22 +26,22 @@ let main =
     | `Ok prog ->
       if to_compile
       then failwith "Not implemented yet"
-        (*            
+        (*
         let basename = Filename.chop_suffix infile ".expr" in
         ignore @@ X86.build prog basename
         *)
-      else 
+      else
 	let rec read acc =
 	  try
 	    let r = read_int () in
 	    Printf.printf "> ";
-	    read (acc @ [r]) 
+	    read (acc @ [r])
           with End_of_file -> acc
 	in
-	let input = read [] in	
-	let output = 
-	  if interpret 
-	  then Language.eval prog input 
+	let input = read [] in
+	let output =
+	  if interpret
+	  then Language.eval prog input
 	  else SM.run (SM.compile prog) input
 	in
 	List.iter (fun i -> Printf.printf "%d\n" i) output
