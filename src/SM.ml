@@ -107,6 +107,9 @@ let rec compile_expr e =
   | Expr.Const n -> [CONST n]
   | Expr.Var x -> [LD x]
   | Expr.Binop (op, a, b) -> compile_expr a @ compile_expr b @ [BINOP op]
+  | Expr.Call (func, args) -> prep_args args @ [CALL func]
+and prep_args args =
+  concat (rev_map compile_expr args)
 
 let rec compile_stmt lbls st =
   match st with
@@ -139,9 +142,14 @@ let rec compile_stmt lbls st =
     let cond_code = compile_expr cond in
     lbls1,
     [LABEL lbl_begin] @ act_code @ cond_code @ [CJMP ("z", lbl_begin)]
+  | Stmt.Return opt_v ->
+    let value_code =
+      (match opt_v with
+        | None   -> []
+        | Some v -> compile_expr v) in
+    lbls, value_code @ [END]
   | Stmt.Call (func, args) ->
-    let args_prepare = concat (rev_map compile_expr args) in
-    lbls, args_prepare @ [CALL func]
+    lbls, prep_args args @ [CALL func]
   | Stmt.Seq (s, s') ->
     let lbls1, fst = compile_stmt lbls s in
     let lbls2, snd = compile_stmt lbls1 s' in
@@ -149,7 +157,8 @@ let rec compile_stmt lbls st =
 
 let compile_def lbls (func, (params, locals, body)) =
   let lbls', cbody = compile_stmt lbls body in
-  lbls', [LABEL func; BEGIN (params, locals)] @ cbody @ [END]
+  let ending = (match hd (rev cbody) with END -> [] | _ -> [END]) in
+  lbls', [LABEL func; BEGIN (params, locals)] @ cbody @ ending
 
 let compile (defs, st) =
   let lbls = new labels in
