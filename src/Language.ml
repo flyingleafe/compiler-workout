@@ -145,8 +145,11 @@ module Expr =
          );
 
       term:
-          name:IDENT { Var name }
-        | n:DECIMAL  { Const n }
+          n:DECIMAL                              { Const n }
+        | name:IDENT
+            s:( "(" args:!(Util.list0 parse) ")" { Call (name, args) }
+              | empty                            { Var name }
+              )                                  { s }
         | -"(" expr -")"
     )
 
@@ -171,43 +174,57 @@ module Stmt =
 
     (* Statement evaluator
 
-         val eval : env -> config -> t -> config
+         val eval : env -> config -> t -> t -> config
 
-       Takes an environment, a configuration and a statement, and returns another configuration. The
-       environment is the same as for expressions
+       Takes an environment, a configuration, a statement and a current continuation,
+       and returns another configuration. The environment is the same as for expressions.
     *)
-    let rec eval env ((sf, input, output, res) as config) e =
+    let concat_prog p q =
+      match (p, q) with
+      | (Skip, Skip) -> Skip
+      | (Skip, q')   -> q'
+      | (p', Skip)   -> p'
+      | (p', q')     -> Seq (p', q')
+
+    let rec eval env ((sf, input, output, res) as config) e cont =
       match e with
       | Read x ->
-        (State.update x (hd input) sf, tl input, output, res)
+        eval env (State.update x (hd input) sf, tl input, output, None) cont Skip
       | Write e ->
         let (sf', i', o', Some v) = Expr.eval env config e in
-        (sf', i', o' @ [v], res)
+        eval env (sf', i', o' @ [v], None) cont Skip
       | Assign (x, e) ->
         let (sf', i', o', Some v) = Expr.eval env config e in
-        (State.update x v sf', i', o', res)
+        eval env (State.update x v sf', i', o', None) cont Skip
       | Seq (s, s') ->
-        eval env (eval env config s) s'
-      | Skip -> config
+        eval env config s (concat_prog s' cont)
+      | Skip ->
+        (match cont with
+         | Skip -> config
+         | p    -> eval env config p Skip)
       | If (cond, the, els) ->
         let (sf', i', o', Some cond_v) = Expr.eval env config cond in
-        eval env (sf', i', o', res) (if cond_v == 1 then the else els)
+        eval env (sf', i', o', Some cond_v) (if cond_v == 1 then the else els) cont
       | While (cond, action) ->
-        let rec while_cycle (sf', _, _, _) as config' =
-          let (_, _, _, Some cond_v) as config' = Expr.eval env config' cond in
-          if (cond_v == 1)
-          then while_cycle (eval env config' action)
-          else config'
-        in while_cycle config
+        let (_, _, _, Some cond_v) as config' = Expr.eval env config cond in
+        if cond_v = 1
+        then eval env config' action (concat_prog e cont)
+        else eval env config' cont Skip
       | Repeat (action, cond) ->
-        let rec repeat_cycle (sf', _, _, _) as config' =
-          let (sf', _, _, _) as config' = eval env config' action in
-          let (_, _, _, Some cond_v) as config' = Expr.eval env config' cond in
-          if (cond_v == 1)
-          then config'
-          else repeat_cycle config'
-        in repeat_cycle config
-      | Call (func, args) -> Expr.eval env config (Expr.Call (func, args))
+        let config' = eval env config action Skip in
+        let (_, _, _, Some cond_v) as config' = Expr.eval env config' cond in
+        if cond_v = 1
+        then eval env config' cont Skip
+        else eval env config' e cont
+      | Return opt_expr ->
+        (match opt_expr with
+         | None   -> (sf, input, output, None)
+         | Some e ->
+           let (sf', i', o', sv) = Expr.eval env config e in
+           (sf', i', o', sv))
+      | Call (func, args) ->
+        let config' = Expr.eval env config (Expr.Call (func, args)) in
+        eval env config' cont Skip
 
     (* Statement parser *)
     let elif_branch elif els =
@@ -233,9 +250,10 @@ module Stmt =
         | %"if" cond: !(Expr.parse) %"then" action:parse
               elif:(%"elif" !(Expr.parse) %"then" parse)*
               els:(%"else" parse)?
-              %"fi"                                              { If (cond, action, elif_branch elif els)}
+              %"fi"                                              { If (cond, action, elif_branch elif els) }
         | %"while" cond: !(Expr.parse) %"do" action:parse %"od"  { While (cond, action) }
         | %"repeat" action:parse %"until" cond: !(Expr.parse)    { Repeat (action, cond) }
+        | %"return" opt_e: !(Expr.parse)?                        { Return opt_e }
         | %"for" init:parse "," cond: !(Expr.parse)
               "," inc:parse %"do" action:parse %"od"             { Seq (init, While (cond, Seq (action, inc))) }
         ;
@@ -288,13 +306,13 @@ class def_env =
       let param_vals = combine params args in
       let sf' = State.enter sf (params @ locals) in
       let sf' = fold_left (fun s (p, v) -> State.update p v s) sf' param_vals in
-      let (sf', input', output', res') = Stmt.eval self (sf', input, output, res) body in
+      let (sf', input', output', res') = Stmt.eval self (sf', input, output, res) body Skip in
       (State.leave sf' sf, input', output', res')
   end
 
 let eval (defs, body) i =
   let env = fold_left (fun e (f, d) -> e#define f d) (new def_env) defs in
-  let (_, _, o, _) = Stmt.eval env (State.empty, i, [], None) body in o
+  let (_, _, o, _) = Stmt.eval env (State.empty, i, [], None) body Skip in o
 
 (* Top-level parser *)
 let parse = ostap (!(Definition.parse)* !(Stmt.parse))
