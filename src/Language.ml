@@ -88,17 +88,6 @@ module Expr =
       | "&&" -> int_of_bool ((bool_of_int x) && (bool_of_int y))
       | other -> failwith ("Unexpected operator: " ^ other)
 
-    (* Prepare arguments for function/procedure call
-
-          val prep_args : env -> config -> t list -> config * int list
-    *)
-    let prep_args env ((sf, input, output, res) as config) args =
-      let arg_eval (cfg, pvs) a =
-        let ((_, _, _, Some v) as cfg') = eval env cfg a in
-        (cfg', pvs @ [v])
-      in
-      fold_left arg_eval (config, []) args
-
     (* Expression evaluator
 
           val eval : env -> config -> t -> config
@@ -109,7 +98,6 @@ module Expr =
 
            method definition : env -> string -> int list -> config -> config
     *)
-
     let rec eval env ((sf, i, o, r) as config) e =
       match e with
       | Const n -> (sf, i, o, Some n)
@@ -119,8 +107,19 @@ module Expr =
         let ((sf', i', o', Some b') as config') = eval env config' b in
         (sf', i', o', Some (eval_op op a' b'))
       | Call (func, args) ->
-        let config', arg_vals = prep_arg env config args in
+        let config', arg_vals = prep_args env config args in
         env#definition func arg_vals config'
+
+    (* Prepare arguments for function/procedure call
+
+          val prep_args : env -> config -> t list -> config * int list
+    *)
+    and prep_args env ((sf, input, output, res) as config) args =
+      let arg_eval (cfg, pvs) a =
+        let ((_, _, _, Some v) as cfg') = eval env cfg a in
+        (cfg', pvs @ [v])
+      in
+      fold_left arg_eval (config, []) args
 
     (* Expression parser. You can use the following terminals:
 
@@ -191,7 +190,8 @@ module Stmt =
         eval env (eval env config s) s'
       | Skip -> config
       | If (cond, the, els) ->
-        eval env config (if Expr.eval sf cond == 1 then the else els)
+        let (sf', i', o', Some cond_v) = Expr.eval env config cond in
+        eval env (sf', i', o', res) (if cond_v == 1 then the else els)
       | While (cond, action) ->
         let rec while_cycle (sf', _, _, _) as config' =
           let (_, _, _, Some cond_v) as config' = Expr.eval env config' cond in
@@ -207,9 +207,7 @@ module Stmt =
           then config'
           else repeat_cycle config'
         in repeat_cycle config
-      | Call (func, args) ->
-        let config', arg_vals = prep_arg env config args in
-        env#definition func arg_vals config'
+      | Call (func, args) -> Expr.eval env config (Expr.Call (func, args))
 
     (* Statement parser *)
     let elif_branch elif els =
@@ -287,16 +285,16 @@ class def_env =
     method define func (def: (string list * string list * Stmt.t)) = {< mp = M.add func def mp >}
     method definition func args (sf, input, output, res) =
       let (params, locals, body) = M.find func mp in
-      let param_vals = combine params args
+      let param_vals = combine params args in
       let sf' = State.enter sf (params @ locals) in
       let sf' = fold_left (fun s (p, v) -> State.update p v s) sf' param_vals in
-      let (sf', input', output', res') = Stmt.eval env (sf', input', output', res') body in
+      let (sf', input', output', res') = Stmt.eval self (sf', input, output, res) body in
       (State.leave sf' sf, input', output', res')
   end
 
 let eval (defs, body) i =
   let env = fold_left (fun e (f, d) -> e#define f d) (new def_env) defs in
-  let (_, _, o) = Stmt.eval env (State.empty, i, [], None) body in o
+  let (_, _, o, _) = Stmt.eval env (State.empty, i, [], None) body in o
 
 (* Top-level parser *)
 let parse = ostap (!(Definition.parse)* !(Stmt.parse))
