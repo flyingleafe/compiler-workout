@@ -2,3 +2,6 @@
 *.cmi
 *.cmx
 *.o
+*.log
+.depend
+src/rc.opt
