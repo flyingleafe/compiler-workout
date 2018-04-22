@@ -141,13 +141,13 @@ let compile_instr env = function
     env, [Push pos; Call "Lwrite"; Pop eax]
   | LD name ->
     let pos, env = (env#global name)#allocate in
-    let mem_pos = M (env#loc name) in
+    let mem_pos = env#loc name in
     env, if_register pos
       [Mov (mem_pos, pos)]
       [Mov (mem_pos, eax); Mov (eax, pos)]
   | ST name ->
     let pos, env = (env#global name)#pop in
-    let mem_pos = M (env#loc name) in
+    let mem_pos = env#loc name in
     env, if_register pos
       [Mov (pos, mem_pos)]
       [Mov (pos, eax); Mov (eax, mem_pos)]
@@ -183,8 +183,15 @@ let rec compile env = function
 (* A set of strings *)
 module S = Set.Make (String)
 
+(* List.init implementations (too lazy to update OCaml to 4.04+) *)
+
+let list_init n f =
+  let rec go acc k =
+    if k < n then go (f k :: acc) (k + 1) else acc
+  in List.rev (go [] 0)
+
 (* Environment implementation *)
-let make_assoc l = List.combine l (List.init (List.length l) (fun x -> x))
+let make_assoc l = List.combine l (list_init (List.length l) (fun x -> x))
 
 class env =
   object (self)

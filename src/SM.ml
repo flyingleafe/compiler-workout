@@ -58,7 +58,7 @@ let rec eval env ((cstack, stack, ((sf, input, output) as in_env)) as config) = 
      | CJMP (cond, label) ->
        eval env (cstack, tl stack, in_env)
          (if check_cond (hd stack) cond then (env#labeled label) else ops)
-     | BEGIN (args, locals) ->
+     | BEGIN (_, args, locals) ->
        let arg_vals, stack' = split_list (length args) stack in
        let sf' = State.enter sf (args @ locals) in
        let sf' = fold_left (fun s (p, v) -> State.update p v s) sf' (combine args arg_vals) in
@@ -66,8 +66,9 @@ let rec eval env ((cstack, stack, ((sf, input, output) as in_env)) as config) = 
      | END -> (match cstack with
          | (prg, sf') :: cstack' -> eval env (cstack', stack, (State.leave sf sf', input, output)) prg
          | []                    -> config)
-     | CALL func ->
+     | CALL (func, _, _) ->
        eval env ((ops, sf) :: cstack, stack, in_env) (env#labeled func)
+     | RET _ -> eval env config ops (* RET is used only for compilation in X86, after every RET there's END anyway *)
      | BINOP op  ->
        let y :: x :: rest = stack
        in eval env (cstack, Expr.eval_op op x y :: rest, (sf, input, output)) ops
@@ -107,7 +108,7 @@ let rec compile_expr e =
   | Expr.Const n -> [CONST n]
   | Expr.Var x -> [LD x]
   | Expr.Binop (op, a, b) -> compile_expr a @ compile_expr b @ [BINOP op]
-  | Expr.Call (func, args) -> prep_args args @ [CALL func]
+  | Expr.Call (func, args) -> prep_args args @ [CALL (func, length args, true)]
 and prep_args args =
   concat (rev_map compile_expr args)
 
@@ -147,9 +148,9 @@ let rec compile_stmt lbls st =
       (match opt_v with
         | None   -> []
         | Some v -> compile_expr v) in
-    lbls, value_code @ [END]
+    lbls, value_code @ [RET (opt_v <> None)]
   | Stmt.Call (func, args) ->
-    lbls, prep_args args @ [CALL func]
+    lbls, prep_args args @ [CALL (func, length args, false)]
   | Stmt.Seq (s, s') ->
     let lbls1, fst = compile_stmt lbls s in
     let lbls2, snd = compile_stmt lbls1 s' in
@@ -158,7 +159,7 @@ let rec compile_stmt lbls st =
 let compile_def lbls (func, (params, locals, body)) =
   let lbls', cbody = compile_stmt lbls body in
   let ending = (match hd (rev cbody) with END -> [] | _ -> [END]) in
-  lbls', [LABEL func; BEGIN (params, locals)] @ cbody @ ending
+  lbls', [LABEL func; BEGIN (func, params, locals)] @ cbody @ ending
 
 let compile (defs, st) =
   let lbls = new labels in
