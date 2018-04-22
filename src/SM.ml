@@ -148,7 +148,7 @@ let rec compile_stmt lbls st =
       (match opt_v with
         | None   -> []
         | Some v -> compile_expr v) in
-    lbls, value_code @ [RET (opt_v <> None)]
+    lbls, value_code @ [RET (opt_v <> None); END]
   | Stmt.Call (func, args) ->
     lbls, prep_args args @ [CALL (func, length args, false)]
   | Stmt.Seq (s, s') ->
