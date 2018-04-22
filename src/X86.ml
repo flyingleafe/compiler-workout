@@ -82,6 +82,7 @@ let show instr =
 
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
+open List
 
 (* Symbolic stack machine evaluator
 
@@ -140,13 +141,13 @@ let compile_instr env = function
     let pos, env = env#pop in
     env, [Push pos; Call "Lwrite"; Pop eax]
   | LD name ->
-    let pos, env = (env#global name)#allocate in
+    let pos, env = (env#try_global name)#allocate in
     let mem_pos = env#loc name in
     env, if_register pos
       [Mov (mem_pos, pos)]
       [Mov (mem_pos, eax); Mov (eax, pos)]
   | ST name ->
-    let pos, env = (env#global name)#pop in
+    let pos, env = (env#try_global name)#pop in
     let mem_pos = env#loc name in
     env, if_register pos
       [Mov (pos, mem_pos)]
@@ -158,6 +159,40 @@ let compile_instr env = function
   | CJMP (cond, label) ->
     let pos, env = env#pop in
     env, [Binop ("cmp", L 0, pos); CJmp (cond, label)]
+  | BEGIN (name, args, locals) ->
+    let env' = env#enter name args locals in
+    env', [Push ebp; Mov (esp, ebp); Binop ("-", M ("$" ^ env'#lsize), esp)]
+  | END ->
+    env, [Label env#epilogue; Mov (ebp, esp); Pop ebp; Ret;
+          Meta (Printf.sprintf "\t.set\t%s,\t%d" env#lsize (env#allocated * word_size))]
+  | CALL (name, n_args, is_ret) ->
+    let regs = env#live_registers in
+    let save_regs = map (fun x -> Push x) regs in
+    let restore_regs = rev_map (fun x -> Pop x) regs in
+    let env', push_args =
+      let rec go env acc = function
+        | 0 -> env, acc
+        | n -> let pos, env = env#pop in
+          go env ((Push pos) :: acc) (n - 1)
+      in go env [] n_args
+    in
+    let pop_args =
+      if n_args > 0
+      then [Binop ("+", L (n_args * word_size), esp)]
+      else []
+    in
+    let env'', ending =
+      if is_ret
+      then let res, env'' = env'#allocate in env'', [Mov (eax, res)]
+      else env', []
+    in
+    env'', save_regs @ push_args @ [Call name] @ pop_args @ restore_regs @ ending
+  | RET is_ret ->
+    let env', val_ret =
+      if is_ret
+      then let pos, env' = env#pop in env', [Mov (pos, eax)]
+      else env, []
+    in env', val_ret @ [Jmp env'#epilogue]
   | BINOP op -> compile_binop env op
 
 (* Compiles a unit: generates x86 machine code for the stack program and surrounds it
@@ -188,10 +223,10 @@ module S = Set.Make (String)
 let list_init n f =
   let rec go acc k =
     if k < n then go (f k :: acc) (k + 1) else acc
-  in List.rev (go [] 0)
+  in rev (go [] 0)
 
 (* Environment implementation *)
-let make_assoc l = List.combine l (list_init (List.length l) (fun x -> x))
+let make_assoc l = combine l (list_init (length l) (fun x -> x))
 
 class env =
   object (self)
@@ -204,9 +239,9 @@ class env =
 
     (* gets a name for a global variable *)
     method loc x =
-      try S (- (List.assoc x args)  -  1)
+      try S (- (assoc x args)  -  1)
       with Not_found ->
-        try S (List.assoc x locals) with Not_found -> M ("global_" ^ x)
+        try S (assoc x locals) with Not_found -> M ("global_" ^ x)
 
     (* allocates a fresh position on a symbolic stack *)
     method allocate =
@@ -234,6 +269,11 @@ class env =
     (* registers a global variable in the environment *)
     method global x  = {< globals = S.add ("global_" ^ x) globals >}
 
+    (* registers a global variable in the environment, if it's not local *)
+    method try_global x = match self#loc x with
+      | M _ -> self#global x
+      | _   -> self
+
     (* gets all global variables *)
     method globals = S.elements globals
 
@@ -242,7 +282,7 @@ class env =
 
     (* enters a function *)
     method enter f a l =
-      {< stack_slots = List.length l; stack = []; locals = make_assoc l; args = make_assoc a; fname = f >}
+      {< stack_slots = length l; stack = []; locals = make_assoc l; args = make_assoc a; fname = f >}
 
     (* returns a label for the epilogue *)
     method epilogue = Printf.sprintf "L%s_epilogue" fname
@@ -252,7 +292,7 @@ class env =
 
     (* returns a list of live registers *)
     method live_registers =
-      List.filter (function R _ -> true | _ -> false) stack
+      filter (function R _ -> true | _ -> false) stack
 
   end
 
@@ -266,9 +306,9 @@ let genasm (ds, stmt) =
       (new env)
       ((LABEL "main") :: (BEGIN ("main", [], [])) :: SM.compile (ds, stmt))
   in
-  let data = Meta "\t.data" :: (List.map (fun s -> Meta (s ^ ":\t.int\t0")) env#globals) in
+  let data = Meta "\t.data" :: (map (fun s -> Meta (s ^ ":\t.int\t0")) env#globals) in
   let asm = Buffer.create 1024 in
-  List.iter
+  iter
     (fun i -> Buffer.add_string asm (Printf.sprintf "%s\n" @@ show i))
     (data @ [Meta "\t.text"; Meta "\t.globl\tmain"] @ code);
   Buffer.contents asm

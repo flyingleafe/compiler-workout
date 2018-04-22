@@ -63,12 +63,11 @@ let rec eval env ((cstack, stack, ((sf, input, output) as in_env)) as config) = 
        let sf' = State.enter sf (args @ locals) in
        let sf' = fold_left (fun s (p, v) -> State.update p v s) sf' (combine args arg_vals) in
        eval env (cstack, stack', (sf', input, output)) ops
-     | END -> (match cstack with
+     | END | RET _ -> (match cstack with
          | (prg, sf') :: cstack' -> eval env (cstack', stack, (State.leave sf sf', input, output)) prg
          | []                    -> config)
      | CALL (func, _, _) ->
        eval env ((ops, sf) :: cstack, stack, in_env) (env#labeled func)
-     | RET _ -> eval env config ops (* RET is used only for compilation in X86, after every RET there's END anyway *)
      | BINOP op  ->
        let y :: x :: rest = stack
        in eval env (cstack, Expr.eval_op op x y :: rest, (sf, input, output)) ops
@@ -148,7 +147,7 @@ let rec compile_stmt lbls st =
       (match opt_v with
         | None   -> []
         | Some v -> compile_expr v) in
-    lbls, value_code @ [RET (opt_v <> None); END]
+    lbls, value_code @ [RET (opt_v <> None)]
   | Stmt.Call (func, args) ->
     lbls, prep_args args @ [CALL (func, length args, false)]
   | Stmt.Seq (s, s') ->
@@ -156,10 +155,14 @@ let rec compile_stmt lbls st =
     let lbls2, snd = compile_stmt lbls1 s' in
     lbls2, fst @ snd
 
+let check_end prg =
+  match hd (rev prg) with
+  | END -> []
+  | _ -> [END]
+
 let compile_def lbls (func, (params, locals, body)) =
   let lbls', cbody = compile_stmt lbls body in
-  let ending = (match hd (rev cbody) with END -> [] | _ -> [END]) in
-  lbls', [LABEL func; BEGIN (func, params, locals)] @ cbody @ ending
+  lbls', [LABEL func; BEGIN (func, params, locals)] @ cbody @ check_end cbody
 
 let compile (defs, st) =
   let lbls = new labels in
@@ -169,4 +172,4 @@ let compile (defs, st) =
     lbls', prev @ prg
   in
   let _, funcs = fold_left compile_and_combine (lbls, []) defs in
-  [LABEL "main"] @ main @ [END] @ funcs
+  main @ check_end main @ funcs
