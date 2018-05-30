@@ -148,11 +148,11 @@ let funcall env name n_args is_ret =
   in
   let push_args =
     match name with
-    | "Barray" -> push_args @ [Push (L n_args)]
+    | "Barray" -> rev @@ [Push (L n_args)] @ push_args
     | "Bsta" ->
-      let x :: v :: ixs = push_args in
+      let x :: v :: ixs = rev push_args in
       ixs @ [x; v] @ [Push (L (n_args - 2))]
-    | _ -> push_args
+    | _ -> rev push_args
   in
   let pop_args =
     if n_args > 0
