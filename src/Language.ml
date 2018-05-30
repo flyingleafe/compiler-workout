@@ -9,6 +9,13 @@ open Combinators
 (* Opening a library for lists *)
 open List
 
+(* List.init implementations (too lazy to update OCaml to 4.04+) *)
+
+let list_init n f =
+  let rec go acc k =
+    if k < n then go (f k :: acc) (k + 1) else acc
+  in rev (go [] 0)
+
 (* Values *)
 module Value =
   struct
@@ -32,7 +39,7 @@ module Value =
     let of_array  a = Array  a
 
     let update_string s i x = String.init (String.length s) (fun j -> if j = i then x else s.[j])
-    let update_array  a i x = init   (length a)   (fun j -> if j = i then x else nth a j)
+    let update_array  a i x = list_init (length a) (fun j -> if j = i then x else nth a j)
 
   end
 

@@ -226,15 +226,8 @@ let rec compile env = function
 (* A set of strings *)
 module S = Set.Make (String)
 
-(* List.init implementations (too lazy to update OCaml to 4.04+) *)
-
-let list_init n f =
-  let rec go acc k =
-    if k < n then go (f k :: acc) (k + 1) else acc
-  in rev (go [] 0)
-
 (* Environment implementation *)
-let make_assoc l = combine l (list_init (length l) (fun x -> x))
+let make_assoc l = combine l (Language.list_init (length l) (fun x -> x))
 
 class env =
   object (self)
