@@ -102,6 +102,13 @@ let rec eval env ((cstack, stack, ((sf, input, output) as in_env)) as config) = 
        eval env (cstack, (Value.of_int res) :: rest, (sf, input, output)) ops
     )
 
+let flabel foo = "L" ^ foo
+
+let f_delabel lfoo =
+  match lfoo.[0] with
+  | 'L' -> String.sub lfoo 1 (String.length lfoo - 1)
+  | _   -> lfoo
+
 (* Top-level evaluation
 
      val run : prg -> int list -> int list
@@ -122,7 +129,7 @@ let run p i =
          method is_label l = M.mem l m
          method labeled l = M.find l m
          method builtin (cstack, stack, (st, i, o)) f n p =
-           let f = match f.[0] with 'L' -> String.sub f 1 (String.length f - 1) | _ -> f in
+           let f = f_delabel f in
            let args, stack' = split_list n stack in
            let (st, i, o, r) = Language.Builtin.eval (st, i, o, None) args f in
            let stack'' = if not p then stack' else let Some r = r in r::stack' in
@@ -143,42 +150,6 @@ let run p i =
    stack machine
 *)
 
-(*
-let compile (defs, p) =
-  let label s = "L" ^ s in
-  let rec call f args p =
-    let args_code = List.concat @@ List.map expr args in
-    args_code @ [CALL (label f, List.length args, p)]
-  and pattern lfalse _ = failwith "Not implemented"
-  and bindings p = failwith "Not implemented"
-  and expr e = failwith "Not implemented" in
-  let rec compile_stmt l env stmt =  failwith "Not implemented" in
-  let compile_def env (name, (args, locals, stmt)) =
-    let lend, env       = env#get_label in
-    let env, flag, code = compile_stmt lend env stmt in
-    env,
-    [LABEL name; BEGIN (name, args, locals)] @
-    code @
-    (if flag then [LABEL lend] else []) @
-    [END]
-  in
-  let env =
-    object
-      val ls = 0
-      method get_label = (label @@ string_of_int ls), {< ls = ls + 1 >}
-    end
-  in
-  let env, def_code =
-    List.fold_left
-      (fun (env, code) (name, others) -> let env, code' = compile_def env (label name, others) in env, code'::code)
-      (env, [])
-      defs
-  in
-  let lend, env = env#get_label in
-  let _, flag, code = compile_stmt lend env p in
-  (if flag then code @ [LABEL lend] else code) @ [END] @ (List.concat def_code)
-*)
-
 class labels =
   object (self)
     val counter = 0
@@ -194,7 +165,7 @@ let rec compile_expr = function
   | Expr.Binop (op, a, b) -> compile_expr a @ compile_expr b @ [BINOP op]
   | Expr.Elem (arr, ix) -> compile_expr ix @ compile_expr arr @ [CALL (".elem", 2, true)]
   | Expr.Length ls -> compile_expr ls @ [CALL (".length", 1, true)]
-  | Expr.Call (func, args) -> prep_args args @ [CALL (func, length args, true)]
+  | Expr.Call (func, args) -> prep_args args @ [CALL (flabel func, length args, true)]
 and prep_args args =
   concat (rev_map compile_expr args)
 
@@ -254,7 +225,7 @@ let rec compile_stmt lbls st =
         | Some v -> compile_expr v) in
     lbls, value_code @ [RET (opt_v <> None)]
   | Stmt.Call (func, args) ->
-    lbls, prep_args args @ [CALL (func, length args, false)]
+    lbls, prep_args args @ [CALL (flabel func, length args, false)]
   | Stmt.Seq (s, s') ->
     let lbls1, fst = compile_stmt lbls s in
     let lbls2, snd = compile_stmt lbls1 s' in
@@ -279,7 +250,7 @@ let check_end prg =
 
 let compile_def lbls (func, (params, locals, body)) =
   let lbls', cbody = compile_stmt lbls body in
-  lbls', [LABEL func; BEGIN (func, params, locals)] @ cbody @ check_end cbody
+  lbls', [LABEL (flabel func); BEGIN ((flabel func), params, locals)] @ cbody @ check_end cbody
 
 let compile (defs, st) =
   let lbls = new labels in

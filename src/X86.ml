@@ -338,19 +338,22 @@ class env =
 (* Generates an assembler text for a program: first compiles the program into
    the stack code, then generates x86 assember code, then prints the assembler file
 *)
+
+let main_lbl = "main"
+
 let genasm (ds, stmt) =
   let stmt = Language.Stmt.Seq (stmt, Language.Stmt.Return (Some (Language.Expr.Const 0))) in
   let env, code =
     compile
       (new env)
-      ((LABEL "main") :: (BEGIN ("main", [], [])) :: SM.compile (ds, stmt))
+      ((LABEL main_lbl) :: (BEGIN (main_lbl, [], [])) :: SM.compile (ds, stmt))
   in
   let data = Meta "\t.data" :: (List.map (fun s      -> Meta (Printf.sprintf "%s:\t.int\t0"         s  )) env#globals) @
                                (List.map (fun (s, v) -> Meta (Printf.sprintf "%s:\t.string\t\"%s\"" v s)) env#strings) in
   let asm = Buffer.create 1024 in
   iter
     (fun i -> Buffer.add_string asm (Printf.sprintf "%s\n" @@ show i))
-    (data @ [Meta "\t.text"; Meta "\t.globl\tmain"] @ code);
+    (data @ [Meta "\t.text"; Meta ("\t.globl\t" ^ main_lbl)] @ code);
   Buffer.contents asm
 
 (* Builds a program: generates the assembler file and compiles it with the gcc toolchain *)
