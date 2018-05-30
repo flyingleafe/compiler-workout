@@ -134,12 +134,12 @@ let compile_instr env = function
   | CONST n ->
     let pos, env = env#allocate in
     env, [Mov (L n, pos)]
-  | READ ->
-    let pos, env = env#allocate in
-    env, [Call "Lread"; Mov (eax, pos)]
-  | WRITE ->
-    let pos, env = env#pop in
-    env, [Push pos; Call "Lwrite"; Pop eax]
+  (* | READ ->
+   *   let pos, env = env#allocate in
+   *   env, [Call "Lread"; Mov (eax, pos)]
+   * | WRITE ->
+   *   let pos, env = env#pop in
+   *   env, [Push pos; Call "Lwrite"; Pop eax] *)
   | LD name ->
     let pos, env = (env#try_global name)#allocate in
     let mem_pos = env#loc name in

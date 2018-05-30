@@ -92,6 +92,10 @@ module Builtin =
 let int_of_bool b = if b then 1 else 0
 let bool_of_int i = if i == 0 then false else true
 
+let maybe_to_list = function
+  | None -> []
+  | Some ls -> ls
+
 (* Simple expressions: syntax and semantics *)
 module Expr =
   struct
@@ -154,12 +158,23 @@ module Expr =
     *)
     let rec eval env ((sf, i, o, r) as config) e =
       match e with
-      | Const n -> (sf, i, o, Some n)
+      | Const n -> (sf, i, o, Some (Value.of_int n))
+      | Array ls ->
+        let config', arg_vals = prep_args env config ls in
+        env#definition "$array" arg_vals config'
+      | String s -> (sf, i, o, Some (Value.of_string s))
       | Var x -> (sf, i, o, Some (State.eval sf x))
       | Binop (op, a, b) ->
         let ((_, _, _, Some a') as config') = eval env config a in
         let ((sf', i', o', Some b') as config') = eval env config' b in
-        (sf', i', o', Some (eval_op op a' b'))
+        let res = eval_op op (Value.to_int a') (Value.to_int b') in
+        (sf', i', o', Some (Value.of_int res))
+      | Elem (arr, idx) ->
+        let config', arg_vals = prep_args env config [arr; idx] in
+        env#definition "$elem" arg_vals config'
+      | Length arr ->
+        let (_, _, _, Some v) as cfg = eval env config arr in
+        env#definition "$length" [v] cfg
       | Call (func, args) ->
         let config', arg_vals = prep_args env config args in
         env#definition func arg_vals config'
@@ -174,18 +189,6 @@ module Expr =
         (cfg', pvs @ [v])
       in
       fold_left arg_eval (config, []) args
-
-    and eval_list env conf xs =
-      let vs, (st, i, o, _) =
-        List.fold_left
-          (fun (acc, conf) x ->
-             let (_, _, _, Some v) as conf = eval env conf x in
-             v::acc, conf
-          )
-          ([], conf)
-          xs
-      in
-      (st, i, o, List.rev vs)
 
     (* Expression parser. You can use the following terminals:
 
@@ -207,13 +210,21 @@ module Expr =
               `Lefta, ostapOps ["+"; "-"];
               `Lefta, ostapOps ["*"; "/"; "%"]
             |]
-            term
+            len_term
          );
+
+      len_term:
+        t:idx_term l:("." %"length" {0})? { match l with Some _ -> Length t | None -> t };
+
+      idx_term:
+        t:term ixs:(-"[" ix:expr -"]" {ix})* { fold_left (fun expr ix -> Elem (expr, ix)) t ixs };
 
       term:
           n:DECIMAL                              { Const n }
+        | s:STRING                               { String (String.sub s 1 (String.length s - 2)) }
+        | "[" elems:!(Util.list0 expr) "]"       { Array elems }
         | name:IDENT
-            s:( "(" args:!(Util.list0 parse) ")" { Call (name, args) }
+            s:( "(" args:!(Util.list0 expr) ")"  { Call (name, args) }
               | empty                            { Var name }
               )                                  { s }
         | -"(" expr -")"
@@ -265,14 +276,10 @@ module Stmt =
 
     let rec eval env ((sf, input, output, res) as config) e cont =
       match e with
-      | Read x ->
-        eval env (State.update x (hd input) sf, tl input, output, None) cont Skip
-      | Write e ->
-        let (sf', i', o', Some v) = Expr.eval env config e in
-        eval env (sf', i', o' @ [v], None) cont Skip
-      | Assign (x, e) ->
-        let (sf', i', o', Some v) = Expr.eval env config e in
-        eval env (State.update x v sf', i', o', None) cont Skip
+      | Assign (x, ixs, e) ->
+        let config', ix_vals = Expr.prep_args env config ixs in
+        let (sf', i', o', Some v) = Expr.eval env config' e in
+        eval env (update sf' x v ix_vals, i', o', None) cont Skip
       | Seq (s, s') ->
         eval env config s (concat_prog s' cont)
       | Skip ->
@@ -281,16 +288,16 @@ module Stmt =
          | p    -> eval env config p Skip)
       | If (cond, the, els) ->
         let (sf', i', o', Some cond_v) = Expr.eval env config cond in
-        eval env (sf', i', o', Some cond_v) (if cond_v == 1 then the else els) cont
+        eval env (sf', i', o', Some cond_v) (if Value.to_int cond_v == 1 then the else els) cont
       | While (cond, action) ->
         let (_, _, _, Some cond_v) as config' = Expr.eval env config cond in
-        if cond_v = 1
+        if Value.to_int cond_v = 1
         then eval env config' action (concat_prog e cont)
         else eval env config' cont Skip
       | Repeat (action, cond) ->
         let config' = eval env config action Skip in
         let (_, _, _, Some cond_v) as config' = Expr.eval env config' cond in
-        if cond_v = 1
+        if Value.to_int cond_v = 1
         then eval env config' cont Skip
         else eval env config' e cont
       | Return opt_expr ->
@@ -317,13 +324,7 @@ module Stmt =
         ;
 
       statement:
-          %"read" "(" name:IDENT ")"                             { Read name }
-        | %"write" "(" expr: !(Expr.parse) ")"                   { Write expr }
-        | name:IDENT
-              s: ( ":=" expr: !(Expr.parse)                      { Assign (name, expr) }
-                 | "(" args: !(Util.list0 Expr.parse) ")"        { Call (name, args) }
-                 )                                               { s }
-        | %"skip"                                                { Skip }
+          %"skip"                                                { Skip }
         | %"if" cond: !(Expr.parse) %"then" action:parse
               elif:(%"elif" !(Expr.parse) %"then" parse)*
               els:(%"else" parse)?
@@ -333,6 +334,11 @@ module Stmt =
         | %"return" opt_e: !(Expr.parse)?                        { Return opt_e }
         | %"for" init:parse "," cond: !(Expr.parse)
               "," inc:parse %"do" action:parse %"od"             { Seq (init, While (cond, Seq (action, inc))) }
+        | name:IDENT
+              s: ( ixs:(-"[" !(Expr.parse) -"]")* ":="
+                   expr: !(Expr.parse)                           { Assign (name, ixs, expr) }
+                 | "(" args: !(Util.list0 Expr.parse) ")"        { Call (name, args) }
+                 )                                               { s }
         ;
 
       sequence:
@@ -378,13 +384,15 @@ class def_env =
   object (self)
     val mp = M.empty
     method define func (def: (string list * string list * Stmt.t)) = {< mp = M.add func def mp >}
-    method definition func args (sf, input, output, res) =
-      let (params, locals, body) = M.find func mp in
-      let param_vals = combine params args in
-      let sf' = State.enter sf (params @ locals) in
-      let sf' = fold_left (fun s (p, v) -> State.update p v s) sf' param_vals in
-      let (sf', input', output', res') = Stmt.eval self (sf', input, output, res) body Skip in
-      (State.leave sf' sf, input', output', res')
+    method definition func args ((sf, input, output, res) as config) =
+      try
+        let (params, locals, body) = M.find func mp in
+        let param_vals = combine params args in
+        let sf' = State.enter sf (params @ locals) in
+        let sf' = fold_left (fun s (p, v) -> State.update p v s) sf' param_vals in
+        let (sf', input', output', res') = Stmt.eval self (sf', input, output, res) body Skip in
+        (State.leave sf' sf, input', output', res')
+      with Not_found -> Builtin.eval config args func
   end
 
 let eval (defs, body) i =

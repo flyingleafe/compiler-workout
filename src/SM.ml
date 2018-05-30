@@ -15,6 +15,11 @@ open List
 (* conditional jump                *) | CJMP    of string * string
 (* begins procedure definition     *) | BEGIN   of string * string list * string list
 (* end procedure definition        *) | END
+(* calls a function/procedure      *) | CALL    of string * int * bool
+(* returns from a function         *) | RET     of bool with show
+
+(* The type for the stack machine program *)
+type prg = insn list
 
 (* The type for the stack machine configuration: control stack, stack and configuration from statement
    interpreter
@@ -43,16 +48,18 @@ let rec eval env ((cstack, stack, ((sf, input, output) as in_env)) as config) = 
   | [] -> config
   | op :: ops ->
     (match op with
-     | READ      -> eval env (cstack, hd input :: stack, (sf, tl input, output)) ops
-     | WRITE     -> eval env (cstack, tl stack, (sf, input, output @ [hd stack])) ops
-     | CONST n   -> eval env (cstack, n :: stack, in_env) ops
+     | CONST n   -> eval env (cstack, (Value.of_int n) :: stack, in_env) ops
+     | STRING s  -> eval env (cstack, (Value.of_string s) :: stack, in_env) ops
      | LD x      -> eval env (cstack, State.eval sf x :: stack, in_env) ops
      | ST x      -> eval env (cstack, tl stack, (State.update x (hd stack) sf, input, output)) ops
      | LABEL _   -> eval env config ops
      | JMP label -> eval env config (env#labeled label)
+     | STA (xs, n) ->
+       let v :: ixs, stack' = split_list (n + 1) stack in
+       eval env (cstack, stack', (Stmt.update sf xs v ixs, input, output)) ops
      | CJMP (cond, label) ->
        eval env (cstack, tl stack, in_env)
-         (if check_cond (hd stack) cond then (env#labeled label) else ops)
+         (if check_cond (Value.to_int @@ hd stack) cond then (env#labeled label) else ops)
      | BEGIN (_, args, locals) ->
        let arg_vals, stack' = split_list (length args) stack in
        let sf' = State.enter sf (args @ locals) in
@@ -61,11 +68,14 @@ let rec eval env ((cstack, stack, ((sf, input, output) as in_env)) as config) = 
      | END | RET _ -> (match cstack with
          | (prg, sf') :: cstack' -> eval env (cstack', stack, (State.leave sf sf', input, output)) prg
          | []                    -> config)
-     | CALL (func, _, _) ->
-       eval env ((ops, sf) :: cstack, stack, in_env) (env#labeled func)
+     | CALL (func, n_args, res_flag) ->
+       if env#is_label func
+       then eval env ((ops, sf) :: cstack, stack, in_env) (env#labeled func)
+       else eval env (env#builtin config func n_args res_flag) ops
      | BINOP op  ->
-       let y :: x :: rest = stack
-       in eval env (cstack, Expr.eval_op op x y :: rest, (sf, input, output)) ops
+       let y :: x :: rest = stack in
+       let res = Expr.eval_op op (Value.to_int x) (Value.to_int y) in
+       eval env (cstack, (Value.of_int res) :: rest, (sf, input, output)) ops
     )
 
 (* Top-level evaluation
@@ -89,8 +99,8 @@ let run p i =
          method labeled l = M.find l m
          method builtin (cstack, stack, (st, i, o)) f n p =
            let f = match f.[0] with 'L' -> String.sub f 1 (String.length f - 1) | _ -> f in
-           let args, stack' = split n stack in
-           let (st, i, o, r) = Language.Builtin.eval (st, i, o, None) (List.rev args) f in
+           let args, stack' = split_list n stack in
+           let (st, i, o, r) = Language.Builtin.eval (st, i, o, None) args f in
            let stack'' = if p then stack' else let Some r = r in r::stack' in
            Printf.printf "Builtin: %s\n";
            (cstack, stack'', (st, i, o))
@@ -117,18 +127,21 @@ class labels =
 let rec compile_expr e =
   match e with
   | Expr.Const n -> [CONST n]
+  | Expr.String s -> [STRING s]
+  | Expr.Array xs -> prep_args xs @ [CALL ("$array", length xs, false)]
   | Expr.Var x -> [LD x]
   | Expr.Binop (op, a, b) -> compile_expr a @ compile_expr b @ [BINOP op]
-  | Expr.Call (func, args) -> prep_args args @ [CALL (func, length args, true)]
+  | Expr.Elem (arr, ix) -> compile_expr ix @ compile_expr arr @ [CALL ("$elem", 2, false)]
+  | Expr.Length ls -> compile_expr ls @ [CALL ("$length", 1, false)]
+  | Expr.Call (func, args) -> prep_args args @ [CALL (func, length args, false)]
 and prep_args args =
   concat (rev_map compile_expr args)
 
 let rec compile_stmt lbls st =
   match st with
-  | Stmt.Read x        -> lbls, [READ; ST x]
-  | Stmt.Write e       -> lbls, compile_expr e @ [WRITE]
-  | Stmt.Assign (x, e) -> lbls, compile_expr e @ [ST x]
-  | Stmt.Skip          -> lbls, []
+  | Stmt.Assign (x, [], e)   -> lbls, compile_expr e @ [ST x]
+  | Stmt.Assign (x, ixs, e)  -> lbls, prep_args ixs @ compile_expr e @ [STA (x, length ixs)]
+  | Stmt.Skip                -> lbls, []
   | Stmt.If (cond, the, els) ->
     let lbl_els, lbls' = lbls#new_label in
     let lbl_end, lbls1 = lbls'#new_label in
@@ -161,7 +174,7 @@ let rec compile_stmt lbls st =
         | Some v -> compile_expr v) in
     lbls, value_code @ [RET (opt_v <> None)]
   | Stmt.Call (func, args) ->
-    lbls, prep_args args @ [CALL (func, length args, false)]
+    lbls, prep_args args @ [CALL (func, length args, true)]
   | Stmt.Seq (s, s') ->
     let lbls1, fst = compile_stmt lbls s in
     let lbls2, snd = compile_stmt lbls1 s' in
