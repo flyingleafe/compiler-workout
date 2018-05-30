@@ -61,6 +61,23 @@ let rec eval env ((cstack, stack, ((sf, input, output) as in_env)) as config) = 
      | ST x      -> eval env (cstack, tl stack, (State.update x (hd stack) sf, input, output)) ops
      | LABEL _   -> eval env config ops
      | JMP label -> eval env config (env#labeled label)
+     | DROP      -> eval env (cstack, tl stack, in_env) ops
+     | DUP       -> eval env (cstack, (hd stack) :: stack, in_env) ops
+     | SWAP      -> let x::y::rest = stack in eval env (cstack, y::x::rest, in_env) ops
+     | LEAVE     -> eval env (cstack, stack, (State.drop sf, input, output)) ops
+     | ENTER xs ->
+       let vs, stack' = split_list (length xs) stack in
+       let bind s (x, v) = State.bind x v s in
+       let sf' = fold_left bind State.undefined (combine xs vs) in
+       eval env (cstack, stack', (State.push sf sf' xs, input, output)) ops
+     | SEXP (tag, n) ->
+       let vs, stack' = split_list n stack in
+       eval env (cstack, (Value.sexp tag vs) :: stack', in_env) ops
+     | TAG t ->
+       let res = (match hd stack with
+           | Value.Sexp (t', _) when t = t' -> 1
+           | _ -> 0) in
+       eval env (cstack, (Value.of_int res) :: tl stack, in_env) ops
      | STA (xs, n) ->
        let v :: ixs, stack' = split_list (n + 1) stack in
        eval env (cstack, stack', (Stmt.update sf xs v ixs, input, output)) ops
@@ -168,18 +185,37 @@ class labels =
     method new_label = "label_" ^ string_of_int counter, {< counter = counter + 1 >}
   end
 
-let rec compile_expr e =
-  match e with
+let rec compile_expr = function
   | Expr.Const n -> [CONST n]
   | Expr.String s -> [STRING s]
-  | Expr.Array xs -> prep_args xs @ [CALL ("$array", length xs, true)]
+  | Expr.Array xs -> prep_args xs @ [CALL (".array", length xs, true)]
+  | Expr.Sexp (tag, xs) -> prep_args xs @ [SEXP (tag, length xs)]
   | Expr.Var x -> [LD x]
   | Expr.Binop (op, a, b) -> compile_expr a @ compile_expr b @ [BINOP op]
-  | Expr.Elem (arr, ix) -> compile_expr ix @ compile_expr arr @ [CALL ("$elem", 2, true)]
-  | Expr.Length ls -> compile_expr ls @ [CALL ("$length", 1, true)]
+  | Expr.Elem (arr, ix) -> compile_expr ix @ compile_expr arr @ [CALL (".elem", 2, true)]
+  | Expr.Length ls -> compile_expr ls @ [CALL (".length", 1, true)]
   | Expr.Call (func, args) -> prep_args args @ [CALL (func, length args, true)]
 and prep_args args =
   concat (rev_map compile_expr args)
+
+let rec compile_pattern lbl_end = function
+  | Stmt.Pattern.Wildcard       -> [DROP]
+  | Stmt.Pattern.Ident _        -> [DROP]
+  | Stmt.Pattern.Sexp (tag, ps) ->
+    let unpack i p = [DUP; CONST i; SWAP; CALL (".elem", 2, true)] @
+                     compile_pattern lbl_end p
+    in
+    let unpacked = concat @@ mapi unpack ps in
+    [DUP; TAG tag; CJMP ("z", lbl_end)] @ unpacked
+
+let rec compile_bind = function
+  | Stmt.Pattern.Wildcard       -> [DROP]
+  | Stmt.Pattern.Ident _        -> [SWAP]
+  | Stmt.Pattern.Sexp (tag, ps) ->
+    let unpack i p = [DUP; CONST i; SWAP; CALL (".elem", 2, true)] @
+                     compile_bind p
+    in
+    concat (mapi unpack ps) @ [DROP]
 
 let rec compile_stmt lbls st =
   match st with
@@ -223,6 +259,18 @@ let rec compile_stmt lbls st =
     let lbls1, fst = compile_stmt lbls s in
     let lbls2, snd = compile_stmt lbls1 s' in
     lbls2, fst @ snd
+  | Stmt.Case (expr, branches) ->
+    let expr_code = compile_expr expr in
+    let lbl_end, lbls' = lbls#new_label in
+    let lbls'', code = fold_left (compile_case_branch lbl_end) (lbls', expr_code) branches in
+    lbls'', code @ [LABEL lbl_end]
+
+and compile_case_branch lbl_end (lbls, prev) (pat, st) =
+  let next_br_lbl, lbls' = lbls#new_label in
+  let pat_code = compile_pattern next_br_lbl pat in
+  let bind_code = compile_bind pat @ [ENTER (Stmt.Pattern.vars pat)] in
+  let lbls'', br_code = compile_stmt lbls' st in
+  lbls'', prev @ pat_code @ bind_code @ br_code @ [LEAVE; JMP lbl_end; LABEL next_br_lbl]
 
 let check_end prg =
   match hd (rev prg) with
