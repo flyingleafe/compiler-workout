@@ -166,27 +166,35 @@ let compile_instr env = function
     env, [Label env#epilogue; Mov (ebp, esp); Pop ebp; Ret;
           Meta (Printf.sprintf "\t.set\t%s,\t%d" env#lsize (env#allocated * word_size))]
   | CALL (name, n_args, is_ret) ->
-    let regs = env#live_registers in
-    let save_regs = map (fun x -> Push x) regs in
-    let restore_regs = rev_map (fun x -> Pop x) regs in
-    let env', push_args =
-      let rec go env acc = function
-        | 0 -> env, acc
-        | n -> let pos, env = env#pop in
-          go env ((Push pos) :: acc) (n - 1)
-      in go env [] n_args
-    in
-    let pop_args =
-      if n_args > 0
-      then [Binop ("+", L (n_args * word_size), esp)]
-      else []
-    in
-    let env'', ending =
-      if is_ret
-      then let res, env'' = env'#allocate in env'', [Mov (eax, res)]
-      else env', []
-    in
-    env'', save_regs @ push_args @ [Call name] @ pop_args @ restore_regs @ ending
+    (match name with
+     | "read" ->
+       let pos, env = env#allocate in
+       env, [Call "Lread"; Mov (eax, pos)]
+     | "write" ->
+       let pos, env = env#pop in
+       env, [Push pos; Call "Lwrite"; Pop eax]
+     | _ ->
+       let regs = env#live_registers in
+       let save_regs = map (fun x -> Push x) regs in
+       let restore_regs = rev_map (fun x -> Pop x) regs in
+       let env', push_args =
+         let rec go env acc = function
+           | 0 -> env, acc
+           | n -> let pos, env = env#pop in
+             go env ((Push pos) :: acc) (n - 1)
+         in go env [] n_args
+       in
+       let pop_args =
+         if n_args > 0
+         then [Binop ("+", L (n_args * word_size), esp)]
+         else []
+       in
+       let env'', ending =
+         if is_ret
+         then let res, env'' = env'#allocate in env'', [Mov (eax, res)]
+         else env', []
+       in
+       env'', save_regs @ push_args @ [Call name] @ pop_args @ restore_regs @ ending)
   | RET is_ret ->
     let env', val_ret =
       if is_ret

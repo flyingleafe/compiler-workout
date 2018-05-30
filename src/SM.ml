@@ -68,10 +68,10 @@ let rec eval env ((cstack, stack, ((sf, input, output) as in_env)) as config) = 
      | END | RET _ -> (match cstack with
          | (prg, sf') :: cstack' -> eval env (cstack', stack, (State.leave sf sf', input, output)) prg
          | []                    -> config)
-     | CALL (func, n_args, res_flag) ->
+     | CALL (func, n_args, is_ret) ->
        if env#is_label func
        then eval env ((ops, sf) :: cstack, stack, in_env) (env#labeled func)
-       else eval env (env#builtin config func n_args res_flag) ops
+       else eval env (env#builtin config func n_args is_ret) ops
      | BINOP op  ->
        let y :: x :: rest = stack in
        let res = Expr.eval_op op (Value.to_int x) (Value.to_int y) in
@@ -101,7 +101,7 @@ let run p i =
            let f = match f.[0] with 'L' -> String.sub f 1 (String.length f - 1) | _ -> f in
            let args, stack' = split_list n stack in
            let (st, i, o, r) = Language.Builtin.eval (st, i, o, None) args f in
-           let stack'' = if p then stack' else let Some r = r in r::stack' in
+           let stack'' = if not p then stack' else let Some r = r in r::stack' in
            Printf.printf "Builtin: %s\n";
            (cstack, stack'', (st, i, o))
        end
@@ -128,12 +128,12 @@ let rec compile_expr e =
   match e with
   | Expr.Const n -> [CONST n]
   | Expr.String s -> [STRING s]
-  | Expr.Array xs -> prep_args xs @ [CALL ("$array", length xs, false)]
+  | Expr.Array xs -> prep_args xs @ [CALL ("$array", length xs, true)]
   | Expr.Var x -> [LD x]
   | Expr.Binop (op, a, b) -> compile_expr a @ compile_expr b @ [BINOP op]
-  | Expr.Elem (arr, ix) -> compile_expr ix @ compile_expr arr @ [CALL ("$elem", 2, false)]
-  | Expr.Length ls -> compile_expr ls @ [CALL ("$length", 1, false)]
-  | Expr.Call (func, args) -> prep_args args @ [CALL (func, length args, false)]
+  | Expr.Elem (arr, ix) -> compile_expr ix @ compile_expr arr @ [CALL ("$elem", 2, true)]
+  | Expr.Length ls -> compile_expr ls @ [CALL ("$length", 1, true)]
+  | Expr.Call (func, args) -> prep_args args @ [CALL (func, length args, true)]
 and prep_args args =
   concat (rev_map compile_expr args)
 
@@ -174,7 +174,7 @@ let rec compile_stmt lbls st =
         | Some v -> compile_expr v) in
     lbls, value_code @ [RET (opt_v <> None)]
   | Stmt.Call (func, args) ->
-    lbls, prep_args args @ [CALL (func, length args, true)]
+    lbls, prep_args args @ [CALL (func, length args, false)]
   | Stmt.Seq (s, s') ->
     let lbls1, fst = compile_stmt lbls s in
     let lbls2, snd = compile_stmt lbls1 s' in
