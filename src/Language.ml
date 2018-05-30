@@ -15,6 +15,7 @@ let list_init n f =
   let rec go acc k =
     if k < n then go (f k :: acc) (k + 1) else acc
   in rev (go [] 0)
+
 (* Values *)
 module Value =
   struct
@@ -203,8 +204,11 @@ module Expr =
       | Const n -> (sf, i, o, Some (Value.of_int n))
       | Array ls ->
         let config', arg_vals = prep_args env config ls in
-        env#definition "$array" arg_vals config'
+        env#definition ".array" arg_vals config'
       | String s -> (sf, i, o, Some (Value.of_string s))
+      | Sexp (tag, ls) ->
+        let (sf', i', o', _), vals = prep_args env config ls in
+        (sf', i', o', Some (Value.sexp tag vals))
       | Var x -> (sf, i, o, Some (State.eval sf x))
       | Binop (op, a, b) ->
         let ((_, _, _, Some a') as config') = eval env config a in
@@ -213,10 +217,10 @@ module Expr =
         (sf', i', o', Some (Value.of_int res))
       | Elem (arr, idx) ->
         let config', arg_vals = prep_args env config [arr; idx] in
-        env#definition "$elem" arg_vals config'
+        env#definition ".elem" arg_vals config'
       | Length arr ->
         let (_, _, _, Some v) as cfg = eval env config arr in
-        env#definition "$length" [v] cfg
+        env#definition ".length" [v] cfg
       | Call (func, args) ->
         let config', arg_vals = prep_args env config args in
         env#definition func arg_vals config'
@@ -266,6 +270,8 @@ module Expr =
         | s:STRING                               { String (String.sub s 1 (String.length s - 2)) }
         | c:CHAR                                 { Const (Char.code c) }
         | "[" elems:!(Util.list0 expr) "]"       { Array elems }
+        | "`" tag:IDENT
+            vals:(-"(" !(Util.list expr) -")")?  { Sexp (tag, maybe_to_list vals) }
         | name:IDENT
             s:( "(" args:!(Util.list0 expr) ")"  { Call (name, args) }
               | empty                            { Var name }
@@ -292,7 +298,10 @@ module Stmt =
 
         (* Pattern parser *)
         ostap (
-          parse: empty {failwith "Not implemented"}
+          parse:
+              %"_"                                                { Wildcard }
+            | "`" tag:IDENT args:(-"(" !(Util.list parse) -")")?  { Sexp (tag, maybe_to_list args) }
+            | name:IDENT                                          { Ident name }
         )
 
         let vars p =
@@ -374,6 +383,35 @@ module Stmt =
       | Call (func, args) ->
         let config' = Expr.eval env config (Expr.Call (func, args)) in
         eval env config' cont Skip
+      | Case (expr, branches) ->
+        let (_, _, _, Some value) as config' = Expr.eval env config expr in
+        let rec match_pattern sf v = function
+          | Pattern.Wildcard       -> Some sf
+          | Pattern.Ident name     -> Some (State.bind name v sf)
+          | Pattern.Sexp (tag, ps) ->
+            (match v with
+             | Value.Sexp (vtag, vs) ->
+               if (vtag <> tag) || (length ps <> length vs)
+               then None
+               else
+                 let pvs = combine ps vs in
+                 let matchp mb_sf (p, v) =
+                   (match mb_sf with
+                    | None -> None
+                    | Some sf -> match_pattern sf v p)
+                 in
+                 fold_left matchp (Some sf) pvs
+             | _ -> None)
+        in
+        let rec next_branch ((sf, i, o, r) as cfg) = function
+          | [] -> failwith "error: mismatched pattern"
+          | (pattern, br) :: bs ->
+            (match match_pattern State.undefined value pattern with
+             | None     -> next_branch cfg bs
+             | Some sf' -> eval env (State.push sf sf' (Pattern.vars pattern), i, o, r) (Seq (br, Leave)) cont)
+        in
+        next_branch config' branches
+      | Leave -> eval env (State.drop sf, input, output, res) cont Skip
 
     (* Statement parser *)
     let elif_branch elif els =
@@ -404,7 +442,15 @@ module Stmt =
                    expr: !(Expr.parse)                           { Assign (name, ixs, expr) }
                  | "(" args: !(Util.list0 Expr.parse) ")"        { Call (name, args) }
                  )                                               { s }
+        | %"case" expr:!(Expr.parse) %"of"
+              branches:!(Util.listBy case_delim case_branch)
+              %"esac"                                            { Case (expr, branches) }
         ;
+
+      case_delim: -"|";
+
+      case_branch:
+          pat:!(Pattern.parse) -"->" br:parse                    { (pat, br) };
 
       sequence:
           head:statement -";" tail:parse          { Seq (head, tail) }
@@ -417,10 +463,6 @@ module Definition =
 
     (* The type for a definition: name, argument list, local variables, body *)
     type t = string * (string list * string list * Stmt.t)
-
-    let maybe_to_list = function
-      | None   -> []
-      | Some l -> l
 
     ostap (
       arg: IDENT;
