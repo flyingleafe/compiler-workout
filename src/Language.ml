@@ -222,6 +222,7 @@ module Expr =
       term:
           n:DECIMAL                              { Const n }
         | s:STRING                               { String (String.sub s 1 (String.length s - 2)) }
+        | c:CHAR                                 { Const (Char.code c) }
         | "[" elems:!(Util.list0 expr) "]"       { Array elems }
         | name:IDENT
             s:( "(" args:!(Util.list0 expr) ")"  { Call (name, args) }
