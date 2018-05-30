@@ -130,16 +130,51 @@ let compile_binop env op =
           Binop ("&&", edx, eax); Mov (eax, res)]
   | _ -> failwith "Not supported operation"
 
+let funcall env name n_args is_ret =
+  let name =
+    if name.[0] = '.'
+    then "B" ^ String.sub name 1 (String.length name - 1)
+    else name
+  in
+  let regs = env#live_registers n_args in
+  let save_regs = map (fun x -> Push x) regs in
+  let restore_regs = rev_map (fun x -> Pop x) regs in
+  let env', push_args =
+    let rec go env acc = function
+      | 0 -> env, acc
+      | n -> let pos, env = env#pop in
+        go env ((Push pos) :: acc) (n - 1)
+    in go env [] n_args
+  in
+  let push_args =
+    match name with
+    | "Barray" -> push_args @ [Push (L n_args)]
+    | "Bsta" ->
+      let x :: v :: ixs = push_args in
+      ixs @ [x; v] @ [Push (L (n_args - 2))]
+    | _ -> push_args
+  in
+  let pop_args =
+    if n_args > 0
+    then [Binop ("+", L (n_args * word_size), esp)]
+    else []
+  in
+  let env'', ending =
+    if is_ret
+    then let res, env'' = env'#allocate in env'', [Mov (eax, res)]
+    else env', []
+  in
+  env'', save_regs @ push_args @ [Call name] @ pop_args @ restore_regs @ ending
+
 let compile_instr env = function
   | CONST n ->
     let pos, env = env#allocate in
     env, [Mov (L n, pos)]
-  (* | READ ->
-   *   let pos, env = env#allocate in
-   *   env, [Call "Lread"; Mov (eax, pos)]
-   * | WRITE ->
-   *   let pos, env = env#pop in
-   *   env, [Push pos; Call "Lwrite"; Pop eax] *)
+  | STRING s ->
+    let s_label, env = env#string s in
+    let pos, env = env#allocate in
+    let env, constr = funcall env ".string" 1 true in
+    env, [Mov (M ("$" ^ s_label), pos)] @ constr
   | LD name ->
     let pos, env = (env#try_global name)#allocate in
     let mem_pos = env#loc name in
@@ -152,6 +187,15 @@ let compile_instr env = function
     env, if_register pos
       [Mov (pos, mem_pos)]
       [Mov (pos, eax); Mov (eax, mem_pos)]
+  | STA (name, i) ->
+    let pos, env = (env#try_global name)#allocate in
+    let mem_pos = env#loc name in
+    let load_arr = if_register pos
+        [Mov (mem_pos, pos)]
+        [Mov (mem_pos, eax); Mov (eax, pos)]
+    in
+    let env, call = funcall env ".sta" (i + 2) false in
+    env, load_arr @ call
   | LABEL label ->
     env, [Label label]
   | JMP label ->
@@ -166,35 +210,7 @@ let compile_instr env = function
     env, [Label env#epilogue; Mov (ebp, esp); Pop ebp; Ret;
           Meta (Printf.sprintf "\t.set\t%s,\t%d" env#lsize (env#allocated * word_size))]
   | CALL (name, n_args, is_ret) ->
-    (match name with
-     | "read" ->
-       let pos, env = env#allocate in
-       env, [Call "Lread"; Mov (eax, pos)]
-     | "write" ->
-       let pos, env = env#pop in
-       env, [Push pos; Call "Lwrite"; Pop eax]
-     | _ ->
-       let regs = env#live_registers 1 in
-       let save_regs = map (fun x -> Push x) regs in
-       let restore_regs = rev_map (fun x -> Pop x) regs in
-       let env', push_args =
-         let rec go env acc = function
-           | 0 -> env, acc
-           | n -> let pos, env = env#pop in
-             go env ((Push pos) :: acc) (n - 1)
-         in go env [] n_args
-       in
-       let pop_args =
-         if n_args > 0
-         then [Binop ("+", L (n_args * word_size), esp)]
-         else []
-       in
-       let env'', ending =
-         if is_ret
-         then let res, env'' = env'#allocate in env'', [Mov (eax, res)]
-         else env', []
-       in
-       env'', save_regs @ push_args @ [Call name] @ pop_args @ restore_regs @ ending)
+    funcall env name n_args is_ret
   | RET is_ret ->
     let env', val_ret =
       if is_ret
